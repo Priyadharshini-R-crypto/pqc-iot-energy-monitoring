@@ -1,4 +1,3 @@
-
 import os
 import time
 import uuid
@@ -12,7 +11,7 @@ import ssl
 import oqs
 import paho.mqtt.client as mqtt
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template_string
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -296,6 +295,11 @@ def home():
     }), 200
 
 
+@app.route("/dashboard", methods=["GET"])
+def dashboard():
+    return render_template_string(DASHBOARD_HTML)
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
@@ -478,6 +482,522 @@ def get_readings():
 
     except ValueError:
         return jsonify({"error": "Invalid limit"}), 400
+
+
+DASHBOARD_HTML = r"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#080d18">
+<title>PQ Energy Monitor</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+:root {
+    color-scheme: dark;
+    --bg: #080d18;
+    --panel: #111a2b;
+    --panel2: #0d1524;
+    --line: #24334b;
+    --muted: #91a2ba;
+    --text: #edf5ff;
+    --cyan: #35d8f2;
+    --green: #35df9a;
+    --amber: #ffc66b;
+    --red: #ff6b78;
+}
+* { box-sizing: border-box; }
+body {
+    margin: 0;
+    background: radial-gradient(circle at 50% -20%, #1b3150 0, var(--bg) 48%);
+    color: var(--text);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+}
+.wrap { width: min(1240px, 94%); margin: 0 auto; padding: 28px 0 42px; }
+header {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 16px; flex-wrap: wrap; margin-bottom: 24px;
+}
+.brand { display: flex; align-items: center; gap: 13px; }
+.logo {
+    width: 46px; height: 46px; border-radius: 14px;
+    display: grid; place-items: center; font-size: 23px;
+    color: var(--cyan); background: #123044; border: 1px solid #28627b;
+    box-shadow: 0 0 28px #20c8ee20;
+}
+h1 { margin: 0; font-size: clamp(21px, 3vw, 29px); letter-spacing: .3px; }
+.subtitle { color: var(--muted); font-size: 13px; margin-top: 5px; }
+.status {
+    display: flex; align-items: center; gap: 9px; border: 1px solid var(--line);
+    background: #101a2b; border-radius: 30px; padding: 10px 14px;
+    color: var(--muted); font-size: 12px;
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); }
+.dot.live { background: var(--green); box-shadow: 0 0 12px var(--green); }
+.panel {
+    background: linear-gradient(145deg, #131e31, #0e1727);
+    border: 1px solid var(--line); border-radius: 18px;
+    box-shadow: 0 14px 35px #0003;
+}
+.login {
+    max-width: 460px; margin: 55px auto; padding: 26px;
+}
+.login h2 { margin: 0 0 8px; font-size: 21px; }
+.login p { color: var(--muted); font-size: 14px; line-height: 1.6; }
+input {
+    width: 100%; padding: 13px 14px; margin: 10px 0;
+    border-radius: 10px; border: 1px solid #344760; background: #091321;
+    color: var(--text); font-size: 14px; outline: none;
+}
+input:focus { border-color: var(--cyan); }
+button {
+    border: 0; background: linear-gradient(90deg, #16a9ce, #2879d7);
+    color: white; font-weight: 700; padding: 13px 18px;
+    border-radius: 10px; cursor: pointer; width: 100%; font-size: 14px;
+}
+button:hover { filter: brightness(1.12); }
+.error { color: var(--red); min-height: 20px; font-size: 13px; }
+.hidden { display: none !important; }
+.section-title {
+    display: flex; justify-content: space-between; align-items: end;
+    gap: 12px; margin: 26px 2px 13px;
+}
+.section-title h2 { margin: 0; font-size: 17px; }
+.section-title span { color: var(--muted); font-size: 12px; }
+.gauges {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 15px;
+}
+.gauge-card { padding: 17px 13px 15px; text-align: center; min-width: 0; }
+.gauge-name { color: #b9c8dc; font-size: 13px; font-weight: 650; letter-spacing: .6px; }
+.gauge {
+    width: 100%; max-width: 245px; display: block; margin: 4px auto -2px;
+    overflow: visible;
+}
+.gauge-track {
+    fill: none; stroke: #293b54; stroke-width: 13; stroke-linecap: round;
+}
+.gauge-progress {
+    fill: none; stroke: var(--cyan); stroke-width: 13; stroke-linecap: round;
+    stroke-dasharray: 345.6; stroke-dashoffset: 345.6;
+    transition: stroke-dashoffset 1s ease, stroke .5s ease;
+    filter: drop-shadow(0 0 5px #35d8f277);
+}
+.needle {
+    stroke: #f2f7ff; stroke-width: 3.5; stroke-linecap: round;
+    transform-origin: 130px 130px; transform: rotate(-135deg);
+    transition: transform 1s cubic-bezier(.2,.8,.2,1);
+}
+.hub { fill: #eaf7ff; stroke: #17283e; stroke-width: 5; }
+.gauge-value { font-size: 27px; font-weight: 750; fill: #f4f8ff; text-anchor: middle; }
+.gauge-unit { font-size: 11px; fill: #91a2ba; text-anchor: middle; }
+.gauge-range { display: flex; justify-content: space-between; color: #71839c; font-size: 10px; padding: 0 12px; margin-top: -7px; }
+.metric-grid {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 15px; margin-top: 15px;
+}
+.metric { padding: 17px 19px; }
+.metric-label { color: var(--muted); font-size: 12px; }
+.metric-value { font-size: 25px; font-weight: 750; margin-top: 6px; }
+.metric-value small { color: var(--muted); font-size: 12px; font-weight: 500; }
+.chart-panel { padding: 19px; margin-top: 15px; }
+.chart-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 12px; }
+.chart-head h2 { font-size: 16px; margin: 0; }
+.chart-wrap { height: 260px; position: relative; }
+.security {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px; margin-top: 15px;
+}
+.security-item {
+    padding: 16px; display: flex; justify-content: space-between; align-items: center;
+    gap: 8px; font-size: 13px;
+}
+.pill {
+    color: var(--green); background: #10372e; border: 1px solid #1d684e;
+    padding: 5px 9px; border-radius: 20px; font-size: 10px; font-weight: 750;
+    white-space: nowrap;
+}
+.pill.wait { color: var(--amber); background: #3b2d17; border-color: #735324; }
+.footer {
+    color: #70819a; text-align: center; font-size: 11px; margin-top: 24px;
+}
+#lastUpdate { color: var(--muted); font-size: 11px; }
+@media (max-width: 850px) {
+    .gauges { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 520px) {
+    .wrap { width: 93%; padding-top: 18px; }
+    .gauges { gap: 9px; }
+    .gauge-card { padding: 14px 7px; }
+    .gauge-value { font-size: 24px; }
+    .security { grid-template-columns: 1fr; gap: 8px; }
+    .chart-wrap { height: 220px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+    <header>
+        <div class="brand">
+            <div class="logo">ϟ</div>
+            <div>
+                <h1>PQ Energy Monitor</h1>
+                <div class="subtitle">Post-quantum secured IoT energy dashboard</div>
+            </div>
+        </div>
+        <div class="status">
+            <span class="dot" id="liveDot"></span>
+            <span id="connectionText">NOT CONNECTED</span>
+        </div>
+    </header>
+
+    <section class="panel login" id="loginPanel">
+        <h2>Connect to your energy monitor</h2>
+        <p>Enter the Render API token configured as <b>PQC_API_TOKEN</b>. It is held only in this browser tab and is not saved.</p>
+        <input id="apiToken" type="password" autocomplete="off" placeholder="Enter API token">
+        <button id="connectButton" type="button">Connect dashboard</button>
+        <div class="error" id="loginError"></div>
+    </section>
+
+    <main id="dashboard" class="hidden">
+        <div class="section-title">
+            <h2>Live electrical measurements</h2>
+            <span id="lastUpdate">Waiting for readings...</span>
+        </div>
+
+        <section class="gauges">
+            <div class="panel gauge-card">
+                <div class="gauge-name">VOLTAGE</div>
+                <svg class="gauge" viewBox="0 0 260 155" role="img" aria-label="Voltage meter">
+                    <path class="gauge-track" d="M 20 130 A 110 110 0 0 1 240 130"/>
+                    <path class="gauge-progress" id="voltageArc" d="M 20 130 A 110 110 0 0 1 240 130"/>
+                    <line class="needle" id="voltageNeedle" x1="130" y1="130" x2="130" y2="43"/>
+                    <circle class="hub" cx="130" cy="130" r="8"/>
+                    <text class="gauge-value" id="voltageValue" x="130" y="112">--</text>
+                    <text class="gauge-unit" x="130" y="126">VOLTS</text>
+                </svg>
+                <div class="gauge-range"><span>0</span><span>150</span><span>300 V</span></div>
+            </div>
+
+            <div class="panel gauge-card">
+                <div class="gauge-name">CURRENT</div>
+                <svg class="gauge" viewBox="0 0 260 155" role="img" aria-label="Current meter">
+                    <path class="gauge-track" d="M 20 130 A 110 110 0 0 1 240 130"/>
+                    <path class="gauge-progress" id="currentArc" d="M 20 130 A 110 110 0 0 1 240 130"/>
+                    <line class="needle" id="currentNeedle" x1="130" y1="130" x2="130" y2="43"/>
+                    <circle class="hub" cx="130" cy="130" r="8"/>
+                    <text class="gauge-value" id="currentValue" x="130" y="112">--</text>
+                    <text class="gauge-unit" x="130" y="126">AMPERES</text>
+                </svg>
+                <div class="gauge-range"><span>0</span><span>5</span><span>10 A</span></div>
+            </div>
+
+            <div class="panel gauge-card">
+                <div class="gauge-name">POWER</div>
+                <svg class="gauge" viewBox="0 0 260 155" role="img" aria-label="Power meter">
+                    <path class="gauge-track" d="M 20 130 A 110 110 0 0 1 240 130"/>
+                    <path class="gauge-progress" id="powerArc" d="M 20 130 A 110 110 0 0 1 240 130"/>
+                    <line class="needle" id="powerNeedle" x1="130" y1="130" x2="130" y2="43"/>
+                    <circle class="hub" cx="130" cy="130" r="8"/>
+                    <text class="gauge-value" id="powerValue" x="130" y="112">--</text>
+                    <text class="gauge-unit" x="130" y="126">WATTS</text>
+                </svg>
+                <div class="gauge-range"><span>0</span><span>1250</span><span>2500 W</span></div>
+            </div>
+
+            <div class="panel gauge-card">
+                <div class="gauge-name">ENERGY</div>
+                <svg class="gauge" viewBox="0 0 260 155" role="img" aria-label="Energy meter">
+                    <path class="gauge-track" d="M 20 130 A 110 110 0 0 1 240 130"/>
+                    <path class="gauge-progress" id="energyArc" d="M 20 130 A 110 110 0 0 1 240 130"/>
+                    <line class="needle" id="energyNeedle" x1="130" y1="130" x2="130" y2="43"/>
+                    <circle class="hub" cx="130" cy="130" r="8"/>
+                    <text class="gauge-value" id="energyValue" x="130" y="112">--</text>
+                    <text class="gauge-unit" x="130" y="126">KWH</text>
+                </svg>
+                <div class="gauge-range"><span>0</span><span>0.025</span><span>0.05 kWh</span></div>
+            </div>
+        </section>
+
+        <section class="metric-grid">
+            <div class="panel metric">
+                <div class="metric-label">FREQUENCY</div>
+                <div class="metric-value"><span id="frequencyValue">--</span> <small>Hz</small></div>
+            </div>
+            <div class="panel metric">
+                <div class="metric-label">POWER FACTOR</div>
+                <div class="metric-value" id="pfValue">--</div>
+            </div>
+        </section>
+
+        <section class="panel chart-panel">
+            <div class="chart-head">
+                <h2>Power consumption history</h2>
+                <span class="subtitle">Watts · latest readings</span>
+            </div>
+            <div class="chart-wrap">
+                <canvas id="powerChart"></canvas>
+            </div>
+        </section>
+
+        <div class="section-title">
+            <h2>Post-quantum security</h2>
+            <span id="deviceLabel">Device: esp32-energy-01</span>
+        </div>
+        <section class="security">
+            <div class="panel security-item">
+                <span>AES-256-GCM encryption</span>
+                <span class="pill" id="encryptionStatus">WAITING</span>
+            </div>
+            <div class="panel security-item">
+                <span>ML-DSA-65 signature</span>
+                <span class="pill" id="signatureStatus">WAITING</span>
+            </div>
+            <div class="panel security-item">
+                <span>Replay protection</span>
+                <span class="pill" id="replayStatus">WAITING</span>
+            </div>
+        </section>
+    </main>
+
+    <div class="footer">PQC IoT Smart Energy Monitoring System · Live data from secured MQTT pipeline</div>
+</div>
+
+<script>
+let apiToken = "";
+let powerChart = null;
+let pollHandle = null;
+
+const gaugeSettings = {
+    voltage: { max: 300, decimals: 1 },
+    current: { max: 10, decimals: 2 },
+    power: { max: 2500, decimals: 1 },
+    energy: { max: 0.05, decimals: 5 }
+};
+
+function setGauge(name, value) {
+    const setting = gaugeSettings[name];
+    const safeValue = Number.isFinite(Number(value)) ? Number(value) : 0;
+    const ratio = Math.max(0, Math.min(1, safeValue / setting.max));
+    const arc = document.getElementById(name + "Arc");
+    const needle = document.getElementById(name + "Needle");
+    const valueText = document.getElementById(name + "Value");
+
+    arc.style.strokeDashoffset = String(345.6 * (1 - ratio));
+    needle.style.transform = "rotate(" + (-135 + 270 * ratio) + "deg)";
+    valueText.textContent = safeValue.toFixed(setting.decimals);
+}
+
+function setSecurityStatus(id, passed) {
+    const element = document.getElementById(id);
+    element.textContent = passed ? "VERIFIED" : "NOT VERIFIED";
+    element.classList.toggle("wait", !passed);
+}
+
+function initializeChart() {
+    if (typeof Chart === "undefined") {
+        document.querySelector(".chart-wrap").innerHTML =
+            '<p class="subtitle">Chart library could not load. The live meter readings are still available.</p>';
+        return;
+    }
+
+    const context = document.getElementById("powerChart").getContext("2d");
+    powerChart = new Chart(context, {
+        type: "line",
+        data: {
+            labels: [],
+            datasets: [{
+                label: "Power (W)",
+                data: [],
+                borderColor: "#35d8f2",
+                backgroundColor: "rgba(53, 216, 242, 0.12)",
+                borderWidth: 2.5,
+                fill: true,
+                tension: 0.35,
+                pointRadius: 2.5,
+                pointBackgroundColor: "#35d8f2"
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 450 },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: "#101b2d",
+                    titleColor: "#edf5ff",
+                    bodyColor: "#35d8f2",
+                    borderColor: "#2a405d",
+                    borderWidth: 1
+                }
+            },
+            scales: {
+                x: {
+                    grid: { color: "rgba(145,162,186,.08)" },
+                    ticks: { color: "#91a2ba", maxTicksLimit: 8 }
+                },
+                y: {
+                    beginAtZero: true,
+                    grid: { color: "rgba(145,162,186,.12)" },
+                    ticks: { color: "#91a2ba" },
+                    title: { display: true, text: "Watts", color: "#91a2ba" }
+                }
+            }
+        }
+    });
+}
+
+function showConnection(connected, message) {
+    document.getElementById("liveDot").classList.toggle("live", connected);
+    document.getElementById("connectionText").textContent =
+        message || (connected ? "LIVE DATA" : "CONNECTION LOST");
+}
+
+function displayReading(reading) {
+    const data = reading.energy_data || {};
+    setGauge("voltage", data.voltage);
+    setGauge("current", data.current);
+    setGauge("power", data.power);
+    setGauge("energy", data.energy);
+
+    document.getElementById("frequencyValue").textContent =
+        Number(data.frequency).toFixed(1);
+    document.getElementById("pfValue").textContent =
+        Number(data.pf).toFixed(2);
+    document.getElementById("deviceLabel").textContent =
+        "Device: " + (reading.device_id || "ESP32");
+
+    setSecurityStatus(
+        "encryptionStatus",
+        reading.encryption === "AES-256-GCM verified"
+    );
+    setSecurityStatus("signatureStatus", reading.signature === "verified");
+    setSecurityStatus(
+        "replayStatus",
+        reading.replay_protection === "passed"
+    );
+}
+
+function updateChart(readings) {
+    if (!powerChart) return;
+
+    const points = readings.slice(-40);
+    powerChart.data.labels = points.map(item => {
+        const date = new Date(item.timestamp * 1000);
+        return date.toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit"
+        });
+    });
+    powerChart.data.datasets[0].data =
+        points.map(item => Number(item.energy_data.power));
+    powerChart.update();
+}
+
+async function refreshReadings() {
+    try {
+        const response = await fetch("/api/readings?limit=100", {
+            method: "GET",
+            headers: { "Authorization": "Bearer " + apiToken },
+            cache: "no-store"
+        });
+
+        if (response.status === 401) {
+            disconnectDashboard("API token was rejected. Enter it again.");
+            return;
+        }
+
+        if (!response.ok) {
+            throw new Error("Server returned HTTP " + response.status);
+        }
+
+        const result = await response.json();
+        const readings = result.readings || [];
+
+        if (readings.length > 0) {
+            const latest = readings[readings.length - 1];
+            displayReading(latest);
+            updateChart(readings);
+            document.getElementById("lastUpdate").textContent =
+                "Updated " + new Date().toLocaleTimeString();
+            showConnection(true, "LIVE · " + readings.length + " READINGS");
+        } else {
+            showConnection(false, "WAITING FOR DATA");
+            document.getElementById("lastUpdate").textContent =
+                "No verified readings received yet";
+        }
+    } catch (error) {
+        showConnection(false, "CONNECTION LOST");
+        document.getElementById("lastUpdate").textContent = error.message;
+    }
+}
+
+function disconnectDashboard(message) {
+    apiToken = "";
+    if (pollHandle) clearInterval(pollHandle);
+    pollHandle = null;
+    document.getElementById("dashboard").classList.add("hidden");
+    document.getElementById("loginPanel").classList.remove("hidden");
+    document.getElementById("loginError").textContent = message || "";
+    showConnection(false, "NOT CONNECTED");
+}
+
+async function connectDashboard() {
+    const input = document.getElementById("apiToken");
+    const suppliedToken = input.value.trim();
+    const errorElement = document.getElementById("loginError");
+
+    if (!suppliedToken) {
+        errorElement.textContent = "Enter your API token to continue.";
+        return;
+    }
+
+    apiToken = suppliedToken;
+    errorElement.textContent = "Checking token...";
+    document.getElementById("connectButton").disabled = true;
+
+    try {
+        const response = await fetch("/api/readings?limit=1", {
+            headers: { "Authorization": "Bearer " + apiToken },
+            cache: "no-store"
+        });
+
+        if (!response.ok) {
+            throw new Error(
+                response.status === 401 ? "Incorrect API token." :
+                "Unable to connect. HTTP " + response.status
+            );
+        }
+
+        input.value = "";
+        document.getElementById("loginPanel").classList.add("hidden");
+        document.getElementById("dashboard").classList.remove("hidden");
+        errorElement.textContent = "";
+
+        initializeChart();
+        await refreshReadings();
+
+        if (pollHandle) clearInterval(pollHandle);
+        pollHandle = setInterval(refreshReadings, 2000);
+    } catch (error) {
+        apiToken = "";
+        errorElement.textContent = error.message;
+    } finally {
+        document.getElementById("connectButton").disabled = false;
+    }
+}
+
+document.getElementById("connectButton").addEventListener("click", connectDashboard);
+document.getElementById("apiToken").addEventListener("keydown", event => {
+    if (event.key === "Enter") connectDashboard();
+});
+</script>
+</body>
+</html>
+"""
 
 
 def on_mqtt_connect(client, userdata, flags, reason_code, properties):
